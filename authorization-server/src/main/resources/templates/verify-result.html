@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Email verification</title>
+    <link rel="stylesheet" th:href="@{/assets/auth.css}"/>
+</head>
+<body>
+<main class="auth-card">
+    <th:block th:if="${verified}">
+        <h1>Email confirmed</h1>
+        <p class="auth-subtitle">Your account is ready</p>
+        <div class="alert alert-success">
+            Your email address has been verified. You can now sign in.
+        </div>
+        <a class="btn btn-primary" th:href="@{/login}">Go to sign in</a>
+    </th:block>
+
+    <th:block th:unless="${verified}">
+        <h1>Verification failed</h1>
+        <p class="auth-subtitle">This link is invalid or has expired</p>
+        <div class="alert alert-error">
+            The verification link is invalid or has expired. Please register again
+            to receive a new one.
+        </div>
+        <a class="btn btn-primary" th:href="@{/register}">Register again</a>
+    </th:block>
+</main>
+</body>
+</html>

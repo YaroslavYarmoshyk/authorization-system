@@ -1,0 +1,3 @@
+rootProject.name = 'resource-server'
+
+includeBuild '../myapp-security-starter'

@@ -1,0 +1,95 @@
+spring:
+  application:
+    name: authorization-server
+  security:
+    oauth2:
+      authorizationserver:
+        issuer: ${AUTHORIZATION_ISSUER}
+        client:
+          web-gateway:
+           registration:
+             client-id: web-gateway
+             client-secret: '{bcrypt}${GATEWAY_CLIENT_SECRET_BCRYPT}'
+             client-authentication-methods: client_secret_basic
+             authorization-grant-types:
+               - authorization_code
+               - refresh_token
+             redirect-uris: '${GATEWAY_BASE_URL}/login/oauth2/code/my-auth'
+             post-logout-redirect-uris: '${GATEWAY_BASE_URL}'
+             scopes:
+               - openid
+               - profile
+               - email
+           require-authorization-consent: false
+           require-proof-key: true
+           token:
+             access-token-time-to-live: 5m
+             refresh-token-time-to-live: 12h
+             reuse-refresh-tokens: false
+          orders-m2m:
+            registration:
+              client-id: orders-service
+              client-secret: '{bcrypt}${ORDERS_M2M_SECRET_BCRYPT}'
+              client-authentication-methods: client_secret_basic
+              authorization-grant-types: client_credentials
+              scopes: internal.read
+            token:
+              access-token-time-to-live: 5m
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            scope:
+              - openid
+              - profile
+              - email
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  mail:
+    host: ${SMTP_HOST}
+    port: ${SMTP_PORT}
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+auth:
+  token:
+    audience: my-api
+  authorization:
+    purge:
+      retention: 24h
+      batch-size: 1000
+  jwk:
+    secret-key: ${AUTH_JWK_SECRET_KEY}
+    rotation:
+      rotation-period: 30d
+      publish-ahead: 24h
+      retirement-grace: 24h
+  federation:
+    providers:
+      google:
+        link-by-email: true
+      microsoft:
+        link-by-email: false
+  registration:
+    token-ttl: 24h
+  password-reset:
+    token-ttl: 1h
+  mail:
+    from: ${MAIL_FROM}

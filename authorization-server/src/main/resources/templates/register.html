@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Create account</title>
+    <link rel="stylesheet" th:href="@{/assets/auth.css}"/>
+</head>
+<body>
+<main class="auth-card">
+    <th:block th:if="${param.submitted}">
+        <h1>Check your inbox</h1>
+        <p class="auth-subtitle">One more step to finish signing up</p>
+        <p class="auth-message">
+            If the email address is available, we've sent a confirmation email
+            with a verification link.
+        </p>
+        <p class="auth-footer">
+            <a th:href="@{/login}">Back to sign in</a>
+        </p>
+    </th:block>
+
+    <th:block th:unless="${param.submitted}">
+        <h1>Create account</h1>
+        <p class="auth-subtitle">Sign up with your email address</p>
+
+        <form th:action="@{/register}" th:object="${form}" method="post">
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" th:field="*{email}"
+                       autocomplete="email" autofocus required/>
+                <span class="field-error" th:errors="*{email}"></span>
+            </div>
+            <div class="form-group">
+                <label for="displayName">Name</label>
+                <input type="text" id="displayName" th:field="*{displayName}"
+                       autocomplete="name" required/>
+                <span class="field-error" th:errors="*{displayName}"></span>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" th:field="*{password}"
+                       autocomplete="new-password" minlength="12" required/>
+                <span class="field-error" th:errors="*{password}"></span>
+            </div>
+            <button type="submit" class="btn btn-primary">Create account</button>
+        </form>
+
+        <p class="auth-footer">
+            Already have an account? <a th:href="@{/login}">Sign in</a>
+        </p>
+    </th:block>
+</main>
+</body>
+</html>

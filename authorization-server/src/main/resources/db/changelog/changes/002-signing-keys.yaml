@@ -1,0 +1,32 @@
+databaseChangeLog:
+  - changeSet:
+      id: 002-create-signing-keys
+      author: yaroslav
+      changes:
+        - createTable:
+            tableName: signing_keys
+            columns:
+              - column:
+                  name: kid
+                  type: varchar(64)
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: jwk_encrypted
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: varchar(16)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: retired_at
+                  type: timestamptz

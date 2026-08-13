@@ -1,0 +1,31 @@
+databaseChangeLog:
+
+  - changeSet:
+      id: 006-oauth2-authorization-created-at
+      author: yaroslav
+      changes:
+        - addColumn:
+            tableName: oauth2_authorization
+            columns:
+              - column:
+                  name: created_at
+                  type: timestamp
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: 006-oauth2-authorization-purge-index
+      author: yaroslav
+      changes:
+        - sql:
+            sql: >-
+              CREATE INDEX idx_oauth2_authorization_purge
+              ON oauth2_authorization (GREATEST(created_at,
+              authorization_code_expires_at, access_token_expires_at,
+              oidc_id_token_expires_at, refresh_token_expires_at,
+              user_code_expires_at, device_code_expires_at))
+      rollback:
+        - dropIndex:
+            indexName: idx_oauth2_authorization_purge
+            tableName: oauth2_authorization

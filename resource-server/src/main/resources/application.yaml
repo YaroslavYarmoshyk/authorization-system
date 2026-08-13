@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: resource-server
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTHORIZATION_ISSUER}
+
+myapp:
+  security:
+    audience: my-api
+    roles-claim: roles
+    permit-all:
+      ANY:
+        - /actuator/health/**
+      GET:
+        - /api/public/**

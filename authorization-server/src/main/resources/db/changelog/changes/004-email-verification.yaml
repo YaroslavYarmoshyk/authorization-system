@@ -1,0 +1,36 @@
+databaseChangeLog:
+  - changeSet:
+      id: 004-email-verification
+      author: yaroslav
+      changes:
+        - addColumn:
+            tableName: users
+            columns:
+              - column:
+                  name: email_verified
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+        - createTable:
+            tableName: email_verification_tokens
+            columns:
+              - column:
+                  name: token_hash
+                  type: varchar(64)
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    unique: true
+                    foreignKeyName: fk_email_verification_user
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: expires_at
+                  type: timestamptz
+                  constraints:
+                    nullable: false
