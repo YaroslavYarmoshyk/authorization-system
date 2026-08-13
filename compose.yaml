@@ -1,3 +1,29 @@
+# ---------------------------------------------------------------------------
+# Infrastructure is always started:
+#     docker compose up -d
+#
+# The three applications sit behind the "apps" profile, so the command above
+# stays IDE-friendly (authorization-server's spring-boot-docker-compose brings
+# this file up on startup and must not boot the apps themselves). Full stack:
+#     docker compose --profile apps up -d --build
+#
+# Published ports:
+#     gateway-service        http://localhost:8080   <- start here
+#     authorization-server   http://kubernetes.docker.internal:9000
+#     resource-server        http://localhost:9001
+#     mailpit (web UI)       http://localhost:8025
+#
+# Why the issuer is "kubernetes.docker.internal" and not "localhost": the "iss"
+# claim is compared verbatim by all three services, so one string has to resolve
+# both in the browser and inside the containers.
+#   - on the host it is already mapped to 127.0.0.1 by Docker Desktop's entry in
+#     C:\Windows\System32\drivers\etc\hosts, so the browser lands on the
+#     published port 9000;
+#   - inside the compose network the network alias below points it straight at
+#     the authorization-server container.
+# (host.docker.internal is NOT usable here: it resolves to the Docker VM address,
+# which is unreachable from the Windows host itself.)
+# ---------------------------------------------------------------------------
 services:
   postgres:
     image: 'postgres:18-bookworm'
@@ -8,17 +34,110 @@ services:
     ports:
       - '5432:5432'
     volumes: [pgdata:/var/lib/postgresql]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U auth-user -d auth']
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   redis:
     image: redis:7-alpine
     ports:
       - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   mailpit:
     image: axllent/mailpit
     ports:
       - "1025:1025"
       - "8025:8025"
+
+  authorization-server:
+    profiles: [apps]
+    build:
+      context: ./authorization-server
+    ports:
+      - '9000:9000'
+    # Makes the issuer hostname resolve to this container from the other services.
+    networks:
+      default:
+        aliases:
+          - kubernetes.docker.internal
+    # format: raw is required -- the bcrypt hashes in .env start with "$2a$10$"
+    # and the dotenv interpolator would otherwise eat them.
+    env_file:
+      - path: .env
+        format: raw
+    # Overrides the host-oriented values from .env (environment wins over env_file).
+    # Secrets (client secrets, AUTH_JWK_SECRET_KEY, GOOGLE_*, MAIL_FROM) still come
+    # from .env untouched.
+    environment:
+      SERVER_PORT: 9000
+      AUTHORIZATION_ISSUER: http://kubernetes.docker.internal:9000
+      GATEWAY_BASE_URL: http://localhost:8080
+      DB_URL: jdbc:postgresql://postgres:5432/auth
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      # application.yaml demands STARTTLS + auth; Mailpit offers neither.
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: 'false'
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: 'false'
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED: 'false'
+    depends_on:
+      postgres: {condition: service_healthy}
+      mailpit: {condition: service_started}
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://localhost:9000/.well-known/openid-configuration']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+
+  resource-server:
+    profiles: [apps]
+    # Root context: settings.gradle includes the ../myapp-security-starter build.
+    build:
+      context: .
+      dockerfile: resource-server/Dockerfile
+    ports:
+      - '9001:9001'
+    environment:
+      SERVER_PORT: 9001
+      AUTHORIZATION_ISSUER: http://kubernetes.docker.internal:9000
+    depends_on:
+      authorization-server: {condition: service_healthy}
+    restart: unless-stopped
+
+  gateway-service:
+    profiles: [apps]
+    build:
+      context: ./gateway-service
+    ports:
+      - '8080:8080'
+    env_file:
+      - path: .env
+        format: raw
+    environment:
+      SERVER_PORT: 8080
+      AUTHORIZATION_ISSUER: http://kubernetes.docker.internal:9000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # application.yaml puts host/port under spring.session.data.redis.*, which
+      # is NOT where the Lettuce connection is configured -- it is ignored and the
+      # client falls back to localhost:6379. Invisible when running on the host,
+      # fatal in a container. These two are the properties that actually connect.
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      ORDERS_SERVICE_URL: http://resource-server:9001
+    depends_on:
+      redis: {condition: service_healthy}
+      authorization-server: {condition: service_healthy}
+      resource-server: {condition: service_started}
+    restart: unless-stopped
 
 volumes:
   pgdata:
