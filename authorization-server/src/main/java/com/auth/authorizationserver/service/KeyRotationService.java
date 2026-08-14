@@ -94,7 +94,8 @@ public class KeyRotationService {
                     .algorithm(JWSAlgorithm.RS256)
                     .build();
 
-            SigningKey key = new SigningKey(kid, jwkEncryptor.encrypt(jwk.toJSONString()), status);
+            SigningKey key = new SigningKey(
+                    kid, jwkEncryptor.encrypt(jwk.toJSONString()), status, clock.instant());
             return signingKeyRepository.save(key);
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("RSA is guaranteed by the JVM spec", e);

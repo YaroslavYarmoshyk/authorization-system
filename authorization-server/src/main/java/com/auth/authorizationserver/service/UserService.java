@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Optional;
 
@@ -21,6 +22,7 @@ public class UserService {
     private final UserRepository users;
     private final EmailVerificationTokenRepository emailVerificationTokenRepository;
     private final FederationProperties federationProperties;
+    private final TransactionTemplate transactionTemplate;
 
     public User provisionFederated(FederatedIdentity identity) {
         Optional<User> existing = users.findByIdentity(identity.provider(), identity.subject());
@@ -28,7 +30,10 @@ public class UserService {
             return existing.get();
         }
         try {
-            return linkOrCreate(identity);
+            // the transaction boundary sits inside the try, not around it: the recovery
+            // lookup below must not run in the transaction the constraint violation
+            // already marked rollback-only
+            return transactionTemplate.execute(_ -> linkOrCreate(identity));
         } catch (DataIntegrityViolationException e) {
             // a concurrent login won the insert race on the email or identity constraint
             return users.findByIdentity(identity.provider(), identity.subject())
@@ -42,7 +47,7 @@ public class UserService {
             throw new FederatedProvisioningException("Provider '" + identity.provider() + "' did not supply an email");
         }
 
-        Optional<User> existingByEmail = users.findByEmail(identity.email());
+        Optional<User> existingByEmail = users.findByEmailWithIdentities(identity.email());
 
         boolean canLinkByEmail = identity.emailVerified()
                 && federationProperties.linkByEmailAllowed(identity.provider());

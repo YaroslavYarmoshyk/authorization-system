@@ -41,7 +41,8 @@ public class RegistrationService {
 
         String normalized = email.trim().toLowerCase();
 
-        Optional<User> existing = userRepository.findByEmail(normalized);
+        // with identities: notifyAccountExists lists the user's federated providers
+        Optional<User> existing = userRepository.findByEmailWithIdentities(normalized);
         if (existing.isPresent()) {
             passwordResetService.notifyAccountExists(existing.get());
             return;

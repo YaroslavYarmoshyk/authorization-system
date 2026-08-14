@@ -1,0 +1,23 @@
+databaseChangeLog:
+  - changeSet:
+      id: 007-user-hardening
+      author: yaroslav
+      changes:
+        # the PK is (provider, subject), so loading a user's identities and the
+        # cascade delete both scanned the table sequentially
+        - createIndex:
+            tableName: user_identities
+            indexName: idx_user_identities_user_id
+            columns:
+              - column:
+                  name: user_id
+
+        - addColumn:
+            tableName: users
+            columns:
+              - column:
+                  name: version
+                  type: BIGINT
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
