@@ -20,9 +20,10 @@ RUN --mount=type=cache,target=/root/.gradle \
 
 # ---------------------------------------------------------------------------
 # Runtime stage.
-# curl is here for the compose healthcheck: no actuator on the classpath, and
-# gateway-service performs eager OIDC discovery at startup, so compose has to
-# wait on the real /.well-known/openid-configuration endpoint.
+# curl is here for the compose healthcheck: there is no actuator on the
+# classpath, so the probe hits the real /.well-known/openid-configuration
+# endpoint -- which also proves the signing keys are loaded before the other
+# services are allowed to start.
 # ---------------------------------------------------------------------------
 FROM eclipse-temurin:25-jre
 WORKDIR /app

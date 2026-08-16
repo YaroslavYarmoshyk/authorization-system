@@ -20,10 +20,9 @@
 - [What's in the box](#whats-in-the-box)
 - [Architecture](#architecture)
 - [Quickstart](#quickstart)
-- [Docker command reference](#docker-command-reference)
+- [Infrastructure command reference](#infrastructure-command-reference)
 - [Smoke test](#smoke-test)
 - [Configuration](#configuration)
-- [Running without Docker](#running-without-docker)
 - [Gotchas worth knowing](#gotchas-worth-knowing)
 
 ---
@@ -147,24 +146,83 @@ sequenceDiagram
 
 ### Prerequisites
 
-- Docker Desktop (Compose v2.30+ — the `env_file` `format: raw` option is required)
+- JDK 25
+- Docker Desktop — for the **infrastructure only**. The three applications run as ordinary Java
+  processes on your machine; nothing about them is containerized.
 - A `.env` file in the repository root (not committed — see [Configuration](#configuration))
 
-### Run everything
+### 1. Start the infrastructure
 
 ```bash
-docker compose --profile apps up -d --build
+docker compose up -d
 ```
 
-First build pulls the JDK image and downloads the Gradle distribution plus dependencies; subsequent
-builds reuse a BuildKit cache mount and take seconds. Compose starts services in dependency order and
-waits on real health checks, so when the command returns, the stack is genuinely ready.
+Postgres, Redis and Mailpit, each with a health check. Nothing else lives in `compose.yaml`.
 
+### 2. Build the three applications
+
+The four Gradle projects are independent builds — there is no aggregator project. `resource-server`
+composes `myapp-security-starter` through `includeBuild '../myapp-security-starter'`, so it needs no
+separate publish step.
+
+```bash
+(cd authorization-server && ./gradlew bootJar)
+(cd resource-server      && ./gradlew bootJar)
+(cd gateway-service      && ./gradlew bootJar)
 ```
-✔ postgres   healthy   → authorization-server   healthy
-                        → resource-server        started
-                        → gateway-service        started
-✔ redis      healthy   ↗
+
+### 3. Run them
+
+Load `.env` into the environment, then start each jar with the `local` profile.
+
+> [!IMPORTANT]
+> **Start the authorization server first and let it finish booting.** The gateway resolves the OIDC
+> discovery document at startup, so it exits with `Unable to resolve Configuration with the provided
+> Issuer` if nothing is listening on `:9000` yet. See [Gotchas](#gotchas-worth-knowing).
+
+**PowerShell**
+
+```powershell
+Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Object {
+    $name, $value = $_ -split '=', 2
+    [Environment]::SetEnvironmentVariable($name, $value)
+}
+
+Start-Process java '-jar','authorization-server/build/libs/authorization-server-0.0.1-SNAPSHOT.jar','--spring.profiles.active=local'
+# wait until http://localhost:9000/.well-known/openid-configuration answers, then:
+Start-Process java '-jar','resource-server/build/libs/resource-server-0.0.1-SNAPSHOT.jar','--spring.profiles.active=local'
+Start-Process java '-jar','gateway-service/build/libs/gateway-service-0.0.1-SNAPSHOT.jar','--spring.profiles.active=local'
+```
+
+**bash**
+
+```bash
+# do NOT `source .env` -- the bcrypt hashes contain $ and the shell would mangle them
+while IFS= read -r line; do
+  case "$line" in ''|'#'*) continue;; esac
+  export "${line%%=*}=${line#*=}"
+done < .env
+
+java -jar authorization-server/build/libs/authorization-server-0.0.1-SNAPSHOT.jar --spring.profiles.active=local &
+until curl -sf http://localhost:9000/.well-known/openid-configuration > /dev/null; do sleep 1; done
+java -jar resource-server/build/libs/resource-server-0.0.1-SNAPSHOT.jar --spring.profiles.active=local &
+java -jar gateway-service/build/libs/gateway-service-0.0.1-SNAPSHOT.jar --spring.profiles.active=local &
+```
+
+From an IDE, run each `*Application` class with `--spring.profiles.active=local` and `.env` loaded —
+same thing, same ordering rule. `./gradlew bootRun --args='--spring.profiles.active=local'` works too,
+and on the authorization server it additionally starts `compose.yaml` for you through
+`spring-boot-docker-compose`.
+
+### Shut down
+
+```bash
+# stop the applications
+#   PowerShell:  Get-Process java | Stop-Process
+#   bash:        kill %1 %2 %3      (or: pkill -f 'spring.profiles.active=local')
+
+docker compose down       # stop the infrastructure, keep the database
+docker compose down -v    # stop it and wipe the database volume
 ```
 
 ### Open it
@@ -172,17 +230,16 @@ waits on real health checks, so when the command returns, the stack is genuinely
 | URL | What you get |
 | :-- | :-- |
 | <http://localhost:8080> | **Start here.** The gateway; any request bounces you into the login flow. |
-| <http://kubernetes.docker.internal:9000> | Authorization server — sign-in, registration, password reset |
-| <http://kubernetes.docker.internal:9000/.well-known/openid-configuration> | OIDC discovery document |
+| <http://localhost:9000> | Authorization server — sign-in, registration, password reset |
+| <http://localhost:9000/.well-known/openid-configuration> | OIDC discovery document |
 | <http://localhost:9001/api/public/ping> | Resource server, unauthenticated endpoint |
 | <http://localhost:8025> | Mailpit — every verification and reset mail lands here |
 
 > [!IMPORTANT]
-> The issuer host is `kubernetes.docker.internal`, **not** `localhost`. The `iss` claim is compared
-> verbatim by all three services, so one hostname has to resolve identically for your browser and inside
-> the container network. Docker Desktop already maps this name to `127.0.0.1` on the host, and a compose
-> network alias points it at the authorization-server container. See
-> [Gotchas](#gotchas-worth-knowing) for why `host.docker.internal` does not work here.
+> The issuer is `http://localhost:9000` and every service — browser, gateway, resource server — reaches
+> it at that one address. It is the `iss` claim, the URL your browser is redirected to, and the host in
+> the Google redirect URI, which Google only accepts over plain `http://` for `localhost`. Keeping the
+> applications off Docker is what lets a single address satisfy all of them.
 
 ### First run, end to end
 
@@ -195,46 +252,22 @@ waits on real health checks, so when the command returns, the stack is genuinely
 
 ---
 
-## Docker command reference
+## Infrastructure command reference
 
-### Everyday
+Everything here targets the three backing services. The applications are plain Java processes — they
+have no `docker compose` verbs.
 
 ```bash
-# infrastructure only (postgres + redis + mailpit) -- what the IDE workflow uses
+# start / stop
 docker compose up -d
-
-# the whole system, rebuilding any changed module
-docker compose --profile apps up -d --build
+docker compose down          # keep the database
+docker compose down -v       # wipe the database volume too
 
 # what is running, and is it healthy
-docker compose --profile apps ps
+docker compose ps
 
 # follow the logs of one service
-docker compose logs -f authorization-server
-
-# stop everything, keep the database
-docker compose --profile apps down
-
-# stop everything and wipe the database volume
-docker compose --profile apps down -v
-```
-
-> [!NOTE]
-> The three applications sit behind the **`apps` profile** on purpose. A bare `docker compose up -d`
-> starts only infrastructure, so `spring-boot-docker-compose` — which the authorization server brings up
-> automatically when you run it from your IDE — cannot collide with a containerized copy of itself.
-
-### Iterating on one service
-
-```bash
-# rebuild + restart a single app
-docker compose --profile apps up -d --build gateway-service
-
-# force a clean build (ignores the layer cache)
-docker compose --profile apps build --no-cache resource-server
-
-# restart without rebuilding
-docker compose restart gateway-service
+docker compose logs -f postgres
 ```
 
 ### Poking at the infrastructure
@@ -253,20 +286,8 @@ docker compose exec postgres psql -U auth-user -d auth -c "select kid, status, c
 docker compose exec redis redis-cli --scan --pattern 'may-app:session:*'
 
 # resolved configuration, fully merged
-docker compose --profile apps config
+docker compose config
 ```
-
-### Housekeeping
-
-```bash
-# tail everything at once
-docker compose --profile apps logs -f --tail=50
-
-# disk reclaim after many rebuilds
-docker builder prune
-```
-
----
 
 ## Smoke test
 
@@ -275,8 +296,8 @@ Copy-paste checks that exercise every moving part.
 **Discovery document reports the right issuer**
 
 ```bash
-curl -s http://kubernetes.docker.internal:9000/.well-known/openid-configuration | jq .issuer
-# "http://kubernetes.docker.internal:9000"
+curl -s http://localhost:9000/.well-known/openid-configuration | jq .issuer
+# "http://localhost:9000"
 ```
 
 **Machine-to-machine token, then call the API with it**
@@ -305,30 +326,49 @@ curl -s http://localhost:9001/api/public/ping
 
 ```bash
 curl -si http://localhost:8080/oauth2/authorization/my-auth | grep -i '^location'
-# location: http://kubernetes.docker.internal:9000/oauth2/authorize?…&code_challenge_method=S256
+# location: http://localhost:9000/oauth2/authorize?…&code_challenge_method=S256
 ```
 
 ---
 
 ## Configuration
 
-Every value the containers need comes from **`.env` in the repository root**, with container-specific
-overrides applied in `compose.yaml` (`environment:` beats `env_file:`). Secrets stay in `.env`; only
-host names and ports are overridden.
+Configuration is split in two, along one line: **where things are** goes in a Spring profile, **what
+must stay secret** goes in `.env`.
+
+| Profile | Activated by | What it sets |
+| :-- | :-- | :-- |
+| `local` | `--spring.profiles.active=local` | The server port, and the two SMTP flags Mailpit cannot satisfy |
+
+Each module has two files. `application.yaml` holds the full configuration, with every address coming
+from an environment variable — `${DB_URL}`, `${REDIS_HOST}`, `${AUTHORIZATION_ISSUER}` and friends, all
+resolved from `.env`. `application-local.yaml` holds only what an environment variable cannot express:
+the listen port, and the `auth` / `starttls` toggles the authorization server has to relax for Mailpit.
+
+Addresses therefore appear exactly once, in `.env`. Point `DB_URL` at another database and nothing else
+has to change. `compose.yaml` carries no application configuration at all; it only defines the three
+backing services.
+
+Placeholders such as `${AUTHORIZATION_ISSUER}` are written **without** defaults on purpose: a missing
+value fails the startup loudly instead of quietly booting against a fallback that happens to be wrong.
 
 | Variable | Consumed by | Notes |
 | :-- | :-- | :-- |
-| `AUTHORIZATION_ISSUER` | all three | Must be byte-identical everywhere. Compose overrides it to `http://kubernetes.docker.internal:9000`. |
+| `AUTHORIZATION_ISSUER` | all three | The issuer, `http://localhost:9000`. Compared verbatim, so it must be byte-identical everywhere. |
 | `GATEWAY_BASE_URL` | authorization-server | Derives the registered redirect and post-logout URIs. |
-| `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | authorization-server | Overridden to `postgres:5432` in compose. |
+| `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | authorization-server | Schema is owned by Liquibase; JPA runs `ddl-auto: validate`. |
 | `GATEWAY_CLIENT_SECRET_BCRYPT` | authorization-server | bcrypt hash **without** the `{bcrypt}` prefix. |
 | `GATEWAY_CLIENT_SECRET` | gateway-service | Plaintext counterpart — keep the two in sync. |
 | `ORDERS_M2M_SECRET_BCRYPT` | authorization-server | Client-credentials client. |
 | `AUTH_JWK_SECRET_KEY` | authorization-server | Base64 of 16/24/32 raw bytes. **Changing it makes every stored JWK undecryptable.** |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | authorization-server | Placeholders are resolved eagerly — the app will not start if unset. |
-| `SMTP_*` / `MAIL_FROM` | authorization-server | Compose points SMTP at the Mailpit container. |
-| `REDIS_HOST` / `REDIS_PORT` | gateway-service | See the Redis note in [Gotchas](#gotchas-worth-knowing). |
+| `SMTP_*` / `MAIL_FROM` | authorization-server | Points at Mailpit; the `local` profile switches SMTP auth and STARTTLS off. |
+| `REDIS_HOST` / `REDIS_PORT` | gateway-service | Spring Session store. See the Redis note in [Gotchas](#gotchas-worth-knowing). |
 | `ORDERS_SERVICE_URL` | gateway-service | Downstream target of the `/api/orders/**` route. |
+
+> [!WARNING]
+> Environment variables outrank profile YAML in Spring Boot. Putting `SPRING_DATA_REDIS_HOST` (or any
+> other relaxed-binding name of a property the profile sets) into `.env` silently wins over the profile.
 
 Regenerate the throwaway local secrets with:
 
@@ -339,93 +379,93 @@ openssl rand -hex 24               # a client secret (hash it with bcrypt for th
 
 ---
 
-## Running without Docker
-
-The four Gradle projects are independent builds — there is no aggregator project. `resource-server`
-composes `myapp-security-starter` through `includeBuild '../myapp-security-starter'`, so it needs no
-separate publish step.
-
-```bash
-docker compose up -d                                    # infrastructure only
-
-cd authorization-server && ./gradlew bootRun --args='--spring.profiles.active=local'
-cd gateway-service      && ./gradlew bootRun --args='--spring.profiles.active=local'
-cd resource-server      && ./gradlew bootRun --args='--spring.profiles.active=local'
-```
-
-The `local` profile sets the ports (`9000` / `8080` / `9001`) and points mail at Mailpit on
-`localhost:1025`. In this mode `AUTHORIZATION_ISSUER=http://localhost:9000` from `.env` is correct,
-because every process shares the host's loopback.
-
----
-
 ## Gotchas worth knowing
 
 <details open>
-<summary><b>The issuer hostname cannot be <code>localhost</code> under Docker</b></summary>
+<summary><b>Start the authorization server before the gateway</b></summary>
 
-`localhost` inside the gateway container means *the gateway*, so OIDC discovery would fail; but the
-issuer string is also what the browser must be redirected to. One name has to satisfy both.
+`spring.security.oauth2.client.provider.my-auth.issuer-uri` makes Boot fetch
+`/.well-known/openid-configuration` **while the context is being built**. If the authorization server
+is not listening yet, the gateway does not retry or degrade — it fails to start:
 
-`host.docker.internal` is the usual answer and **does not work on this setup** — Docker Desktop maps it
-to the VM address (`192.168.249.10`), which containers can reach but the Windows host cannot; the login
-page would be unreachable from the browser. `kubernetes.docker.internal` is mapped to `127.0.0.1` in the
-host's `hosts` file, and a compose network alias makes it resolve to the authorization-server container
-from inside the network. Both directions work.
-
-A tidier alternative, if you do not mind an Administrator edit once: add `127.0.0.1 auth-server` to
-`C:\Windows\System32\drivers\etc\hosts`, then swap the alias and `AUTHORIZATION_ISSUER` to
-`http://auth-server:9000`.
-
-</details>
-
-<details>
-<summary><b>Redis host/port are configured under the wrong prefix</b></summary>
-
-`gateway-service/src/main/resources/application.yaml` puts `host` and `port` under
-`spring.session.data.redis.*`. That subtree only carries `namespace` — the Lettuce **connection** is
-configured by `spring.data.redis.*`. The two properties are silently ignored and the client falls back to
-`localhost:6379`, which happens to be correct when you run on the host and fails hard in a container.
-
-`compose.yaml` works around it with `SPRING_DATA_REDIS_HOST` / `SPRING_DATA_REDIS_PORT`. The real fix is
-to move host and port under `spring.data.redis` and leave `namespace` where it is.
-
-</details>
-
-<details>
-<summary><b>bcrypt hashes vs. Docker Compose interpolation</b></summary>
-
-A bcrypt hash starts with `$2a$10$…`, and Compose's dotenv parser expands `$rT8E…` as a variable
-reference — silently corrupting the hash. The app services therefore attach `.env` as:
-
-```yaml
-env_file:
-  - path: .env
-    format: raw
+```
+Unable to resolve Configuration with the provided Issuer of "http://localhost:9000"
+Caused by: I/O error on GET ".../.well-known/openid-configuration": Connection refused
 ```
 
-Compose still parses `.env` separately for its own interpolation and prints
-`The "rT8E" variable is not set` on every command. That warning is **cosmetic**: with `format: raw` the
-containers receive the hashes intact. To silence it, single-quote the hash values in `.env` and drop
-`format: raw`.
+The resource server is not affected: its decoder is a `SupplierJwtDecoder`, so it fetches JWKS lazily
+on the first token it validates.
+
+That one discovery call is also what supplies `end_session_endpoint`, which
+`OidcClientInitiatedServerLogoutSuccessHandler` needs for RP-initiated logout, and the `issuerUri` that
+`OidcIdTokenValidator` compares the `iss` claim against. Replacing `issuer-uri` with the explicit
+`authorization-uri` / `token-uri` / `jwk-set-uri` properties would remove the startup dependency, but
+both of those behaviors would disappear **silently** — logout would still return 302, it just would no
+longer end the session at the authorization server.
 
 </details>
 
 <details>
-<summary><b>Mail settings differ between host and container</b></summary>
+<summary><b>The issuer has to stay <code>localhost</code></b></summary>
 
-`application.yaml` requires SMTP auth and STARTTLS; Mailpit offers neither. The `local` profile handles
-this for host runs, but it also hardcodes `spring.mail.host: localhost`, which is wrong in a container —
-so containers do **not** activate `local`. `compose.yaml` relaxes the three
-`SPRING_MAIL_PROPERTIES_MAIL_SMTP_*` flags instead.
+Three things read that one string: the **browser** follows it to the login page, **Google** receives
+`{issuer}/login/oauth2/code/google` as the federated redirect URI, and the **gateway and resource
+server** call it server-to-server. Google only accepts a plain `http://` redirect URI when the host is
+`localhost`, which pins the value for everyone else.
+
+This is the reason the applications are not containerized. Inside a container `localhost` means the
+calling container, so a containerized gateway cannot use the issuer for its back-channel calls, and
+every workaround costs something real:
+
+- `host.docker.internal` — Docker Desktop maps it to the VM address, reachable from containers but
+  **not from this Windows host**, so the login page becomes unreachable from the browser.
+- `kubernetes.docker.internal` — resolves from both sides, but the authorization server then derives
+  `redirect_uri=http://kubernetes.docker.internal:9000/login/oauth2/code/google`, which Google rejects,
+  and mails verification links pointing at a machine-local hostname.
+- A public/back-channel split — works, but needs a hand-built `ClientRegistration`, because
+  `issuer-uri` is a single value and the explicit-endpoint properties drop `end_session_endpoint` and
+  the `iss` check.
+
+Running the applications as plain Java processes makes all of it moot: one address, reachable by
+everyone, and stock Spring Boot property configuration.
 
 </details>
 
 <details>
-<summary><b>Building <code>resource-server</code> needs the repository root as context</b></summary>
+<summary><b>Redis host/port belong under <code>spring.data.redis</code>, not <code>spring.session.data.redis</code></b></summary>
 
-Because of the `includeBuild`, `resource-server/Dockerfile` is built with `context: .` and copies both
-`myapp-security-starter/` and `resource-server/`. Build it with `docker compose build resource-server`,
-not `docker build resource-server/`.
+`spring.session.data.redis.*` carries only `namespace`; the Lettuce **connection** is configured by
+`spring.data.redis.*`. Host and port placed under the session subtree are silently ignored and the
+client falls back to `localhost:6379`.
+
+`application.yaml` currently binds `${REDIS_HOST}` / `${REDIS_PORT}` under
+`spring.session.data.redis.*`, so **those two values are not actually reaching Lettuce** — the gateway
+connects to `localhost:6379` regardless. It works only because that is where Redis happens to be.
+Point `REDIS_HOST` at anything else and the setting is ignored without a word. Moving the two
+properties under `spring.data.redis` fixes it; `namespace` stays where it is.
+
+</details>
+
+<details>
+<summary><b>bcrypt hashes vs. shell and Compose interpolation</b></summary>
+
+A bcrypt hash starts with `$2a$10$…`. Two things try to expand that:
+
+- **your shell** — `source .env` mangles the hashes, which is why the Quickstart reads the file line by
+  line and exports without expansion;
+- **Docker Compose**, which parses `./.env` for its own interpolation and prints
+  `The "rT8E" variable is not set` on every command. Nothing in `compose.yaml` references a variable
+  any more, so the warning is purely cosmetic. Single-quoting the hash values in `.env` silences it —
+  check your IDE's env-file plugin strips the quotes before you do.
+
+</details>
+
+<details>
+<summary><b>The Dockerfiles are unused</b></summary>
+
+Each application still has a `Dockerfile` from when the whole stack ran in Compose. Nothing builds them
+now. Keep them if you plan to deploy the applications as images, and remember that
+`resource-server/Dockerfile` needs the repository root as its build context, because
+`includeBuild '../myapp-security-starter'` requires both directories.
 
 </details>

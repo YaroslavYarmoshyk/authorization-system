@@ -3,10 +3,6 @@ server:
 
 spring:
   mail:
-    host: localhost
-    port: 1025
-    username: ""
-    password: ""
     properties:
       mail:
         smtp:
