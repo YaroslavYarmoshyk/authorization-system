@@ -10,12 +10,15 @@ spring:
            registration:
              client-id: web-gateway
              client-secret: '{bcrypt}${GATEWAY_CLIENT_SECRET_BCRYPT}'
-             client-authentication-methods: client_secret_basic
+             client-authentication-methods:
+               - client_secret_basic
              authorization-grant-types:
                - authorization_code
                - refresh_token
-             redirect-uris: '${GATEWAY_BASE_URL}/login/oauth2/code/my-auth'
-             post-logout-redirect-uris: '${GATEWAY_BASE_URL}'
+             redirect-uris:
+               - '${GATEWAY_BASE_URL}/login/oauth2/code/my-auth'
+             post-logout-redirect-uris:
+               - '${GATEWAY_BASE_URL}'
              scopes:
                - openid
                - profile
@@ -26,15 +29,6 @@ spring:
              access-token-time-to-live: 5m
              refresh-token-time-to-live: 12h
              reuse-refresh-tokens: false
-          orders-m2m:
-            registration:
-              client-id: orders-service
-              client-secret: '{bcrypt}${ORDERS_M2M_SECRET_BCRYPT}'
-              client-authentication-methods: client_secret_basic
-              authorization-grant-types: client_credentials
-              scopes: internal.read
-            token:
-              access-token-time-to-live: 5m
       client:
         registration:
           google:
@@ -60,10 +54,10 @@ spring:
     properties:
       mail:
         smtp:
-          auth: true
+          auth: false
           starttls:
-            enable: true
-            required: true
+            enable: false
+            required: false
           connectiontimeout: 5000
           timeout: 5000
           writetimeout: 5000

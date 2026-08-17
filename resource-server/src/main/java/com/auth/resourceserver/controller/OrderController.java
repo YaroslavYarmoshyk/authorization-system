@@ -24,7 +24,7 @@ public class OrderController {
             new Order("ord-1003", "USB-C Hub", 3, "DELIVERED"));
 
     @GetMapping
-    @PreAuthorize("hasAnyAuthority('SCOPE_internal.read', 'ROLE_USER')")
+    @PreAuthorize("hasRole('USER')")
     List<Order> listOrders(@AuthenticationPrincipal Jwt jwt) {
         log.info("Orders listed for subject={} roles={}", jwt.getSubject(), jwt.getClaimAsStringList("roles"));
         return ORDERS;

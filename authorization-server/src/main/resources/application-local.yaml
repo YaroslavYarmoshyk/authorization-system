@@ -1,12 +1,2 @@
 server:
   port: 9000
-
-spring:
-  mail:
-    properties:
-      mail:
-        smtp:
-          auth: false
-          starttls:
-            enable: false
-            required: false

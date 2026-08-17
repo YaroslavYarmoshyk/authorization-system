@@ -40,9 +40,9 @@
 <summary><b>Feature detail</b></summary>
 
 **Authorization server**
-- Authorization Code + PKCE (**required**) for the web client, Client Credentials for machine-to-machine.
+- Authorization Code + PKCE (**required**) for the web client.
 - Access tokens live **5 minutes**; refresh tokens **12 hours** and **rotate on every use** (`reuse-refresh-tokens: false`).
-- Custom claims: `aud: my-api`, `roles`, `email`. Client-credential tokens are stamped `roles: ["SERVICE"]`.
+- Custom claims: `aud: my-api`, `roles`, `email`.
 - **JWK lifecycle in Postgres.** RSA-3072 keys generated on demand, private material encrypted at rest with
   AES-GCM (`AUTH_JWK_SECRET_KEY`), rotated through `CURRENT → NEXT → RETIRED` on a 30-day period with a
   24-hour publish-ahead and a 24-hour retirement grace. The hourly job takes a **Postgres advisory lock**, so
@@ -300,20 +300,11 @@ curl -s http://localhost:9000/.well-known/openid-configuration | jq .issuer
 # "http://localhost:9000"
 ```
 
-**Machine-to-machine token, then call the API with it**
+**The protected API rejects an anonymous call**
 
 ```bash
-TOKEN=$(curl -s -u "orders-service:$ORDERS_M2M_SECRET" \
-  -d grant_type=client_credentials -d scope=internal.read \
-  http://localhost:9000/oauth2/token | jq -r .access_token)
-
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  http://localhost:9001/api/orders     # 200
-
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9001/api/orders   # 401
 ```
-
-*(`ORDERS_M2M_SECRET` is the plaintext counterpart of `ORDERS_M2M_SECRET_BCRYPT`, documented in `.env`.)*
 
 **The public endpoint stays open**
 
@@ -359,7 +350,6 @@ value fails the startup loudly instead of quietly booting against a fallback tha
 | `DB_URL` / `DB_USERNAME` / `DB_PASSWORD` | authorization-server | Schema is owned by Liquibase; JPA runs `ddl-auto: validate`. |
 | `GATEWAY_CLIENT_SECRET_BCRYPT` | authorization-server | bcrypt hash **without** the `{bcrypt}` prefix. |
 | `GATEWAY_CLIENT_SECRET` | gateway-service | Plaintext counterpart — keep the two in sync. |
-| `ORDERS_M2M_SECRET_BCRYPT` | authorization-server | Client-credentials client. |
 | `AUTH_JWK_SECRET_KEY` | authorization-server | Base64 of 16/24/32 raw bytes. **Changing it makes every stored JWK undecryptable.** |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | authorization-server | Placeholders are resolved eagerly — the app will not start if unset. |
 | `SMTP_*` / `MAIL_FROM` | authorization-server | Points at Mailpit; the `local` profile switches SMTP auth and STARTTLS off. |

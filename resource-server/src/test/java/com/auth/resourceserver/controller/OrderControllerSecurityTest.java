@@ -40,13 +40,6 @@ class OrderControllerSecurityTest {
     }
 
     @Test
-    void serviceScopeIsAuthorized() throws Exception {
-        mockMvc.perform(get("/api/orders")
-                        .with(jwt().authorities(new SimpleGrantedAuthority("SCOPE_internal.read"))))
-                .andExpect(status().isOk());
-    }
-
-    @Test
     void userRoleIsAuthorized() throws Exception {
         mockMvc.perform(get("/api/orders")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_USER"))))
