@@ -125,8 +125,10 @@ sequenceDiagram
     participant A as authorization-server
     participant R as resource-server
 
-    B->>G: GET /api/orders
+    B->>G: GET / (no session)
     G-->>B: 302 → /oauth2/authorization/my-auth
+    Note over B,G: A page navigation redirects.<br/>/api/** and /user answer 401 instead.
+    B->>G: GET /oauth2/authorization/my-auth
     G-->>B: 302 → /oauth2/authorize (PKCE challenge)
     B->>A: GET /oauth2/authorize
     A-->>B: Sign-in page
@@ -135,7 +137,7 @@ sequenceDiagram
     B->>G: callback with code
     G->>A: POST /oauth2/token (code + verifier + client secret)
     A-->>G: access · refresh · id token
-    G-->>B: Set-Cookie SESSION (session stored in Redis)
+    G-->>B: 302 → / · Set-Cookie SESSION (stored in Redis)
     B->>G: GET /api/orders (cookie)
     G->>R: GET /api/orders (Authorization: Bearer …)
     R->>A: GET /oauth2/jwks (cached)
