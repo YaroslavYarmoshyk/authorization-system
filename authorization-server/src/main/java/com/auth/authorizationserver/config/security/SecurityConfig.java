@@ -1,8 +1,11 @@
 package com.auth.authorizationserver.config.security;
 
 import com.auth.authorizationserver.config.federation.FederatedLoginSuccessHandler;
+import com.auth.authorizationserver.config.properties.AuthProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.security.autoconfigure.web.servlet.SecurityFilterProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -22,7 +25,9 @@ import org.springframework.security.web.authentication.AuthenticationFailureHand
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.authentication.SimpleUrlAuthenticationFailureHandler;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
+import org.springframework.session.web.http.SessionRepositoryFilter;
 
+import java.time.Clock;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -68,6 +73,20 @@ public class SecurityConfig {
         return http.build();
     }
 
+
+    /**
+     * Ordered into the gap between Spring Session, which resolves the session
+     * ({@link SessionRepositoryFilter#DEFAULT_ORDER}), and Spring Security, which reads the
+     * {@code SecurityContext} out of it.
+     */
+    @Bean
+    FilterRegistrationBean<SessionMaxLifetimeFilter> sessionMaxLifetimeFilter(AuthProperties authProperties,
+                                                                             Clock clock) {
+        var filter = new SessionMaxLifetimeFilter(authProperties.session().maxLifetime(), clock);
+        var registration = new FilterRegistrationBean<>(filter);
+        registration.setOrder(SecurityFilterProperties.DEFAULT_FILTER_ORDER - 1);
+        return registration;
+    }
 
     @Bean
     PasswordEncoder passwordEncoder() {

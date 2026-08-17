@@ -51,10 +51,15 @@
   (24 h TTL), password reset (1 h TTL). Tokens are 256-bit random values stored **only as SHA-256 hashes**.
 - Federated login with account linking by verified email (`auth.federation.providers.*.link-by-email`).
 - Expired authorization records are purged on a schedule (24 h retention, 1000-row batches).
+- **SSO session in Postgres** via Spring Session JDBC, **8 h idle** and a **14-day absolute cap**
+  (`auth.session.max-lifetime`) so an always-active browser cannot hold one open forever. The login
+  session outlives a restart and is shared across instances; the `AUTH_SESSION` cookie is `HttpOnly`
+  + `SameSite=Lax`, and `Secure` everywhere except the `local` profile.
 - Schema is owned by **Liquibase**; JPA runs with `ddl-auto: validate`.
 
 **Gateway (BFF pattern)**
-- `oauth2Login` + **Spring Session in Redis**, so the browser only ever sees an opaque `SESSION` cookie.
+- `oauth2Login` + **Spring Session in Redis**, so the browser only ever sees an opaque `SESSION` cookie
+  — `HttpOnly` + `SameSite=Lax`, and `Secure` outside the `local` profile.
 - `TokenRelay` attaches the access token to downstream calls and `RemoveRequestHeader=Cookie` strips the
   session on the way out.
 - CSRF token published as a JS-readable `XSRF-TOKEN` cookie.
@@ -89,8 +94,8 @@ flowchart LR
     end
 
     subgraph infra["infrastructure"]
-        PG[("PostgreSQL<br/>users · keys · grants")]
-        RD[("Redis<br/>sessions")]
+        PG[("PostgreSQL<br/>users · keys · grants · sessions")]
+        RD[("Redis<br/>gateway sessions")]
         MP["Mailpit<br/><code>:8025</code>"]
     end
 
@@ -329,12 +334,15 @@ must stay secret** goes in `.env`.
 
 | Profile | Activated by | What it sets |
 | :-- | :-- | :-- |
-| `local` | `--spring.profiles.active=local` | The server port, and the two SMTP flags Mailpit cannot satisfy |
+| `local` | `--spring.profiles.active=local` | The server port, and the session cookie's `Secure` flag, which nothing local can satisfy over plain http |
 
 Each module has two files. `application.yaml` holds the full configuration, with every address coming
 from an environment variable — `${DB_URL}`, `${REDIS_HOST}`, `${AUTHORIZATION_ISSUER}` and friends, all
 resolved from `.env`. `application-local.yaml` holds only what an environment variable cannot express:
-the listen port, and the `auth` / `starttls` toggles the authorization server has to relax for Mailpit.
+the listen port, and `server.*.session.cookie.secure: false`. That last one is the only setting that is
+*less* safe locally than in the base file — cookies are `Secure` by default and the local profile has to
+opt out, rather than the other way round, so forgetting to configure an environment cannot silently ship
+a session cookie that travels over plain http. No new `.env` variable was needed for any of it.
 
 Addresses therefore appear exactly once, in `.env`. Point `DB_URL` at another database and nothing else
 has to change. `compose.yaml` carries no application configuration at all; it only defines the three
@@ -370,6 +378,73 @@ openssl rand -hex 24               # a client secret (hash it with bcrypt for th
 ---
 
 ## Gotchas worth knowing
+
+<details>
+<summary><b>Session timeouts are idle timeouts, and nothing caps them for you</b></summary>
+
+`spring.session.timeout` resets on every request that touches the session, so 8 h means "8 h of
+inactivity", not "8 h". A browser that keeps polling holds an SSO session — the credential that mints
+tokens for every client — open indefinitely. Spring Session has no absolute cap either: `Session`
+exposes `getCreationTime()` and `getMaxInactiveInterval()`, and only the latter is enforced.
+
+`SessionMaxLifetimeFilter` closes that gap by comparing `getCreationTime()` against
+`auth.session.max-lifetime`. It is registered at `DEFAULT_FILTER_ORDER - 1`, in the gap between Spring
+Session resolving the session and Spring Security reading the `SecurityContext` out of it — one slot
+later and an over-age session would still authenticate the request it was caught on.
+
+No cleanup job is needed for the rows: an over-age session is deleted the moment it is next used, and
+one that is never used again expires on the idle timeout instead.
+
+</details>
+
+<details>
+<summary><b><code>SameSite=Strict</code> silently breaks the authorization server</b></summary>
+
+`Strict` is the instinctive "most secure" choice and it is the wrong one here. It withholds the cookie
+on **all** cross-site navigations, including top-level ones, and two of this system's hops are exactly
+that:
+
+1. The gateway redirects the browser to `/oauth2/authorize`. Without the session cookie the
+   authorization server sees an anonymous user and re-prompts for login on every authorization — SSO
+   quietly stops working.
+2. Google redirects back to `{issuer}/login/oauth2/code/google`. That request needs the
+   `OAUTH2_AUTHORIZATION_REQUEST` attribute from the session to validate `state` and `nonce`, so
+   federated login fails outright with `authorization_request_not_found`.
+
+`Lax` **is** sent on top-level cross-site GET navigations, which is what both of those are. It is the
+correct value, not a compromise. `None` would only be needed for iframe-based silent renewal, which
+the BFF pattern makes unnecessary.
+
+</details>
+
+<details>
+<summary><b>Two apps on <code>localhost</code> cannot both use the <code>SESSION</code> cookie</b></summary>
+
+Cookies are scoped by host and **ignore the port**, so `localhost:9000` and `localhost:8080` share one
+cookie jar. Spring Session's default cookie name is `SESSION` for both the servlet and the reactive
+stack, so the moment the authorization server adopted Spring Session it would have started overwriting
+the gateway's session cookie, and vice versa — presenting as a login loop with no obvious cause.
+
+Hence `server.servlet.session.cookie.name: AUTH_SESSION` on the authorization server. This is the one
+case where renaming a session cookie is not security-by-obscurity: it is collision avoidance.
+
+</details>
+
+<details>
+<summary><b>MockMvc cannot verify session cookie configuration</b></summary>
+
+Boot builds the `DefaultCookieSerializer` in two mutually exclusive branches:
+`@ConditionalOnNotWarDeployment` reads `server.servlet.session.cookie.*`, while
+`@ConditionalOnWarDeployment` reads the settings off the `ServletContext` instead. That condition
+matches whenever the context is a `WebApplicationContext` with a non-null `ServletContext` — which is
+true for `MockServletContext`, and therefore for every `webEnvironment = MOCK` test.
+
+So a MockMvc test of the session cookie asserts against framework defaults and never sees your
+configuration at all. `SessionPersistenceTests` uses `webEnvironment = RANDOM_PORT` for this reason.
+A real embedded run takes the other branch because the servlet context does not exist yet when
+conditions are evaluated.
+
+</details>
 
 <details open>
 <summary><b>Start the authorization server before the gateway</b></summary>

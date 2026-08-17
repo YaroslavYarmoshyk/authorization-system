@@ -1,0 +1,109 @@
+databaseChangeLog:
+
+  # Transcribed from org/springframework/session/jdbc/schema-postgresql.sql in
+  # spring-session-jdbc 4.1.0. Spring Session ships that script for you to run itself,
+  # but Liquibase owns this schema, so spring.session.jdbc.initialize-schema is 'never'
+  # and the DDL lives here instead. The library's own constraint and index names are
+  # kept — they mark this table as vendored rather than ours, and they make the file
+  # easy to diff against the script again after a Spring Session upgrade.
+  - changeSet:
+      id: 008-spring-session
+      author: yaroslav
+      changes:
+        - createTable:
+            tableName: spring_session
+            columns:
+              - column:
+                  name: primary_id
+                  type: char(36)
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: spring_session_pk
+              - column:
+                  name: session_id
+                  type: char(36)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: creation_time
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: last_access_time
+                  type: bigint
+                  constraints:
+                    nullable: false
+              - column:
+                  name: max_inactive_interval
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: expiry_time
+                  type: bigint
+                  constraints:
+                    nullable: false
+              # populated by Spring Session's principal-name resolver, which reads the
+              # Authentication out of the stored SecurityContext
+              - column:
+                  name: principal_name
+                  type: varchar(100)
+
+        # the session id the cookie carries; primary_id is the internal surrogate
+        - createIndex:
+            tableName: spring_session
+            indexName: spring_session_ix1
+            unique: true
+            columns:
+              - column:
+                  name: session_id
+
+        # driven by the cleanup job, which deletes expired rows every minute
+        - createIndex:
+            tableName: spring_session
+            indexName: spring_session_ix2
+            columns:
+              - column:
+                  name: expiry_time
+
+        - createIndex:
+            tableName: spring_session
+            indexName: spring_session_ix3
+            columns:
+              - column:
+                  name: principal_name
+
+        - createTable:
+            tableName: spring_session_attributes
+            columns:
+              - column:
+                  name: session_primary_id
+                  type: char(36)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: attribute_name
+                  type: varchar(200)
+                  constraints:
+                    nullable: false
+              # JDK-serialized attribute value: the SecurityContext, the saved
+              # authorization request, and the federated login's state/nonce
+              - column:
+                  name: attribute_bytes
+                  type: bytea
+                  constraints:
+                    nullable: false
+
+        - addPrimaryKey:
+            tableName: spring_session_attributes
+            constraintName: spring_session_attributes_pk
+            columnNames: session_primary_id, attribute_name
+
+        - addForeignKeyConstraint:
+            constraintName: spring_session_attributes_fk
+            baseTableName: spring_session_attributes
+            baseColumnNames: session_primary_id
+            referencedTableName: spring_session
+            referencedColumnNames: primary_id
+            onDelete: CASCADE

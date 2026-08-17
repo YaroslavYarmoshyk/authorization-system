@@ -36,3 +36,11 @@ spring:
               filters:
                 - TokenRelay=
                 - RemoveRequestHeader=Cookie
+
+server:
+  reactive:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: true

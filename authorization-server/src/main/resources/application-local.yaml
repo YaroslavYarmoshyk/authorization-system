@@ -1,2 +1,6 @@
 server:
   port: 9000
+  servlet:
+    session:
+      cookie:
+        secure: false

@@ -1,6 +1,10 @@
 spring:
   application:
     name: authorization-server
+  session:
+    timeout: 8h
+    jdbc:
+      initialize-schema: never
   security:
     oauth2:
       authorizationserver:
@@ -62,9 +66,20 @@ spring:
           timeout: 5000
           writetimeout: 5000
 
+server:
+  servlet:
+    session:
+      cookie:
+        name: AUTH_SESSION
+        http-only: true
+        same-site: lax
+        secure: true
+
 auth:
   token:
     audience: my-api
+  session:
+    max-lifetime: 14d
   authorization:
     purge:
       retention: 24h
